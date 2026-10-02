@@ -64,13 +64,24 @@ class _FakeCamera:
     def __init__(self, refreshed):
         self.refreshed = refreshed
         self.writes = []
+        self.current_mode = "unknown"
+        self.controls = {}
 
     def set_control(self, key, value):
         self.writes.append((key, value))
+        self.controls[key] = value
         return value
+
+    def get_control(self, key):
+        return self.controls.get(key, self.refreshed.get(key, 0))
+
+    def read_video_mode(self):
+        return self.current_mode
 
     def set_video_mode(self, mode, verify_streaming=False):
         self.writes.append(("mode", mode, verify_streaming))
+        self.current_mode = mode
+        self.controls.update({"pan": 0, "tilt": 0})
         return mode
 
     def read_state(self):
@@ -250,6 +261,96 @@ class WindowRegressionTests(unittest.TestCase):
         self.assertEqual(window.state["zoom"], 142)
         sync.assert_called_once_with({"zoom": 142, "anti_flicker": 3, "mode": "normal"})
         modes.assert_called_once_with("normal")
+
+    def test_scene_preset_applies_gimbal_position_after_camera_mode(self):
+        camera = _FakeCamera({"pan": 65, "tilt": -15, "mode": "normal"})
+        camera.current_mode = "tracking"
+        window = SimpleNamespace(
+            presets=SimpleNamespace(
+                presets=[Preset("Scene", {"pan": 65, "tilt": -15, "mode": "normal"})]
+            ),
+            camera=camera,
+            preview=SimpleNamespace(running=False),
+            state={},
+            _submit=_immediate_submit,
+            _sync_control_widgets=Mock(),
+            _sync_mode_buttons=Mock(),
+        )
+
+        LinkStudioWindow._apply_preset(window, 0)
+
+        self.assertEqual(
+            camera.writes[-3:],
+            [("mode", "normal", False), ("pan", 65), ("tilt", -15)],
+        )
+
+    def test_scene_preset_does_not_reapply_current_video_mode(self):
+        camera = _FakeCamera({"pan": 65, "tilt": -15, "mode": "normal"})
+        camera.current_mode = "normal"
+        window = SimpleNamespace(
+            presets=SimpleNamespace(
+                presets=[Preset("Scene", {"pan": 65, "tilt": -15, "mode": "normal"})]
+            ),
+            camera=camera,
+            preview=SimpleNamespace(running=False),
+            state={},
+            _submit=_immediate_submit,
+            _sync_control_widgets=Mock(),
+            _sync_mode_buttons=Mock(),
+        )
+
+        LinkStudioWindow._apply_preset(window, 0)
+
+        self.assertEqual(camera.writes, [("pan", 65), ("tilt", -15)])
+
+    def test_scene_preset_retries_gimbal_when_firmware_resets_initial_write(self):
+        class CameraWithOneDelayedReset(_FakeCamera):
+            def __init__(self):
+                super().__init__({"pan": 65, "tilt": -15, "mode": "normal"})
+                self.current_mode = "tracking"
+                self.reset_on_first_read = True
+
+            def get_control(self, key):
+                if self.reset_on_first_read:
+                    self.reset_on_first_read = False
+                    self.controls.update({"pan": 0, "tilt": 0})
+                return super().get_control(key)
+
+        camera = CameraWithOneDelayedReset()
+        window = SimpleNamespace(
+            presets=SimpleNamespace(
+                presets=[Preset("Scene", {"pan": 65, "tilt": -15, "mode": "normal"})]
+            ),
+            camera=camera,
+            preview=SimpleNamespace(running=False),
+            state={},
+            _submit=_immediate_submit,
+            _sync_control_widgets=Mock(),
+            _sync_mode_buttons=Mock(),
+        )
+
+        LinkStudioWindow._apply_preset(window, 0)
+
+        self.assertEqual(camera.writes[-4:], [("pan", 65), ("tilt", -15)] * 2)
+        self.assertEqual(camera.get_control("pan"), 65)
+        self.assertEqual(camera.get_control("tilt"), -15)
+
+    def test_tracking_target_queued_before_preset_is_discarded(self):
+        submitted = Mock()
+        window = SimpleNamespace(
+            _closed=False,
+            _preset_applying=False,
+            _tracking_generation=2,
+            _last_tracking_move=0.0,
+            _submit=submitted,
+        )
+        target = SimpleNamespace(
+            center_x=0.9, center_y=0.1, face_count=1, size=0.2, paused=False
+        )
+
+        self.assertFalse(LinkStudioWindow._apply_tracking_target(window, target, generation=1))
+
+        submitted.assert_not_called()
 
     def test_scene_preset_restores_regions_and_unregistered_effect_widgets(self):
         software = {

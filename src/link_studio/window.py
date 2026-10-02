@@ -194,6 +194,8 @@ class LinkStudioWindow(Adw.ApplicationWindow):
         self._tracking_area: Rect = (0.0, 0.0, 1.0, 1.0)
         self._pause_areas: list[Rect] = []
         self._last_tracking_move = 0.0
+        self._preset_applying = False
+        self._tracking_generation = 0
 
         self._build_ui()
         self.preview.processor.set_tracking_callback(self._tracking_target_received)
@@ -1909,10 +1911,21 @@ class LinkStudioWindow(Adw.ApplicationWindow):
         )
 
     def _tracking_target_received(self, target: TrackingTarget | None) -> None:
-        GLib.idle_add(self._apply_tracking_target, target)
+        generation = self._tracking_generation
+        if self._preset_applying:
+            return
+        GLib.idle_add(self._apply_tracking_target, target, generation)
 
-    def _apply_tracking_target(self, target: TrackingTarget | None) -> bool:
-        if self._closed or target is None or target.paused:
+    def _apply_tracking_target(
+        self, target: TrackingTarget | None, generation: int | None = None
+    ) -> bool:
+        if (
+            self._closed
+            or self._preset_applying
+            or (generation is not None and generation != self._tracking_generation)
+            or target is None
+            or target.paused
+        ):
             return False
         now = time.monotonic()
         if now - self._last_tracking_move < 0.22:
@@ -2873,6 +2886,9 @@ class LinkStudioWindow(Adw.ApplicationWindow):
 
     def _apply_preset(self, index: int, startup: bool = False) -> None:
         preset = self.presets.presets[index]
+        self._preset_applying = True
+        self._tracking_generation = getattr(self, "_tracking_generation", 0) + 1
+        generation = self._tracking_generation
         software = preset.values.get("software_effects")
         if isinstance(software, dict):
             current_orientation = self.preview.effect_settings.orientation
@@ -2893,8 +2909,6 @@ class LinkStudioWindow(Adw.ApplicationWindow):
                 "sharpness",
                 "anti_flicker",
                 "zoom",
-                "pan",
-                "tilt",
             ):
                 if key in values:
                     self.camera.set_control(key, int(values[key]))
@@ -2943,8 +2957,22 @@ class LinkStudioWindow(Adw.ApplicationWindow):
                     )
                 self.preview.set_effects(**restored)
             mode = str(values.get("mode", "normal"))
-            if mode in VIDEO_MODES:
+            if mode in VIDEO_MODES and self.camera.read_video_mode() != mode:
                 self.camera.set_video_mode(mode, verify_streaming=self.preview.running)
+            # Verify PTZ readback and retry if firmware overwrote a preset write.
+            gimbal = {key: int(values[key]) for key in ("pan", "tilt") if key in values}
+            for attempt in range(3):
+                for key, value in gimbal.items():
+                    self.camera.set_control(key, value)
+                if not gimbal:
+                    break
+                actual = {key: self.camera.get_control(key) for key in gimbal}
+                if actual == gimbal:
+                    break
+                if attempt == 2:
+                    raise RuntimeError(
+                        f"Camera did not retain preset pan/tilt: expected {gimbal}, got {actual}"
+                    )
             return mode, self.camera.read_state()
 
         def success(result: tuple[str, dict[str, Any]]) -> None:
@@ -2965,13 +2993,19 @@ class LinkStudioWindow(Adw.ApplicationWindow):
                 self._sync_software_effect_widgets(self.preview.effect_settings)
             self._sync_control_widgets(sync_values)
             self._sync_mode_buttons(mode)
+            if self._tracking_generation == generation:
+                self._preset_applying = False
+
+        def failure(_exc: Exception) -> None:
+            if self._tracking_generation == generation:
+                self._preset_applying = False
 
         message = (
             f"Applied default preset “{preset.name}”"
             if startup
             else f"Applied preset “{preset.name}”"
         )
-        self._submit(message, operation, on_success=success)
+        self._submit(message, operation, on_success=success, on_error=failure)
 
     def _delete_preset_dialog(self, index: int) -> None:
         preset = self.presets.presets[index]
