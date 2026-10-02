@@ -1,0 +1,124 @@
+#!/usr/bin/env bash
+# Link Studio virtual camera helper for Fedora.
+# Creates /dev/video20 using v4l2loopback (akmod from RPM Fusion Free).
+# Usage: ./setup_virtual_camera_fedora.sh [--reload]
+#   --reload  if v4l2loopback is already loaded without /dev/video20 and a
+#             device can't be added live, unload and reload the module.
+set -euo pipefail
+
+if ((EUID != 0)); then
+  if ! command -v pkexec >/dev/null 2>&1; then
+    printf 'Install polkit to use the system authentication prompt for virtual-camera setup.\n' >&2
+    exit 1
+  fi
+  script_path=$(readlink -f -- "$0")
+  exec pkexec "$script_path" "$@"
+fi
+
+VIDEO_NR=20
+DEVICE="/dev/video${VIDEO_NR}"
+LABEL="Link Studio Virtual Camera"
+RELOAD=0
+[[ "${1:-}" == "--reload" ]] && RELOAD=1
+
+info() { printf '%s\n' "$*"; }
+err()  { printf '%s\n' "$*" >&2; }
+
+if ! command -v dnf >/dev/null 2>&1 || ! command -v rpm >/dev/null 2>&1; then
+  err "This helper is for Fedora (dnf/rpm not found)."
+  exit 1
+fi
+
+# --- 1. RPM Fusion Free ------------------------------------------------------
+if ! rpm -q rpmfusion-free-release >/dev/null 2>&1; then
+  err "RPM Fusion Free is not enabled. Enable it, then run this helper again:"
+  err "  sudo dnf install https://mirrors.rpmfusion.org/free/fedora/rpmfusion-free-release-\$(rpm -E %fedora).noarch.rpm"
+  exit 1
+fi
+
+# --- 2. akmod-v4l2loopback ---------------------------------------------------
+to_install=()
+rpm -q akmod-v4l2loopback >/dev/null 2>&1 || to_install+=(akmod-v4l2loopback)
+rpm -q v4l2loopback       >/dev/null 2>&1 || to_install+=(v4l2loopback)   # v4l2loopback-ctl
+
+# --- 3. v4l2-ctl (package: v4l-utils, from the main Fedora repos) ------------
+command -v v4l2-ctl >/dev/null 2>&1 || to_install+=(v4l-utils)
+
+# kernel-devel for the running kernel is needed to build the module
+rpm -q "kernel-devel-$(uname -r)" >/dev/null 2>&1 || to_install+=("kernel-devel-$(uname -r)")
+
+if ((${#to_install[@]})); then
+  info "Installing: ${to_install[*]}."
+  dnf install -y "${to_install[@]}"
+else
+  info "Required packages are already installed."
+fi
+
+# --- Make sure a module exists for the running kernel ------------------------
+if ! modinfo v4l2loopback >/dev/null 2>&1; then
+  info "No v4l2loopback module found for $(uname -r); building it with akmods..."
+  akmods --force --kernels "$(uname -r)" || true
+  if ! modinfo v4l2loopback >/dev/null 2>&1; then
+    err "The module could not be built for $(uname -r)."
+    err "Check: sudo journalctl -u akmods -b   and   /var/cache/akmods/v4l2loopback/*.log"
+    exit 1
+  fi
+fi
+
+# --- Secure Boot warning -----------------------------------------------------
+if command -v mokutil >/dev/null 2>&1 && mokutil --sb-state 2>/dev/null | grep -qi 'enabled'; then
+  info "Note: Secure Boot is enabled. If loading fails with 'Key was rejected',"
+  info "enroll the akmods key: sudo kmodgenca -a && sudo mokutil --import /etc/pki/akmods/certs/public_key.der (then reboot)."
+fi
+
+# --- 4. Existing module config / device --------------------------------------
+conf_hits=$(grep -rsl v4l2loopback /etc/modprobe.d /etc/modules-load.d \
+              /usr/lib/modprobe.d /usr/lib/modules-load.d 2>/dev/null || true)
+if [[ -n "$conf_hits" ]]; then
+  info "Existing v4l2loopback configuration found in:"
+  while IFS= read -r f; do
+    info "  $f"
+    grep -v '^\s*#' "$f" | grep -i v4l2loopback | sed 's/^/      /' || true
+  done <<< "$conf_hits"
+  info "These apply at boot and may conflict with the device created here."
+fi
+
+if [[ -e "$DEVICE" ]]; then
+  info "$DEVICE already exists:"
+  v4l2-ctl --list-devices 2>/dev/null | grep -A2 -F "$DEVICE" -B1 || true
+  info "Nothing to do. If it doesn't show up in apps, start Link Studio (exclusive_caps"
+  info "only advertises the camera once a producer is streaming) and restart the app."
+  exit 0
+fi
+
+# --- 5. Create /dev/video20 --------------------------------------------------
+if lsmod | grep -q '^v4l2loopback'; then
+  info "v4l2loopback is already loaded, but $DEVICE does not exist. Existing devices:"
+  v4l2-ctl --list-devices 2>/dev/null | grep -A2 -i 'v4l2loopback' || true
+
+  info "Trying to add $DEVICE to the loaded module..."
+  if v4l2loopback-ctl add -n "$LABEL" -x 1 "$DEVICE" >/dev/null 2>&1 && [[ -e "$DEVICE" ]]; then
+    info "Created $DEVICE. Restart Link Studio to use it."
+    exit 0
+  fi
+
+  if ((RELOAD)); then
+    info "Reloading v4l2loopback (close OBS/browsers/anything using the camera first)..."
+    modprobe -r v4l2loopback || { err "Module is in use. Find the culprit: sudo fuser -v /dev/video*"; exit 1; }
+  else
+    err "Could not add the device live. Close anything using the existing virtual camera"
+    err "(e.g. OBS) and run:  $0 --reload"
+    exit 1
+  fi
+fi
+
+info "Loading a temporary $LABEL."
+modprobe v4l2loopback devices=1 video_nr="$VIDEO_NR" card_label="$LABEL" exclusive_caps=1
+
+if [[ -e "$DEVICE" ]]; then
+  info "Created $DEVICE. Restart Link Studio to use it."
+  info "The module stays loaded until reboot; no persistent system configuration was written."
+else
+  err "modprobe succeeded but $DEVICE was not created. Check: dmesg | tail"
+  exit 1
+fi

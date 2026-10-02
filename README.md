@@ -89,9 +89,10 @@ link-studio-setup-virtual-camera
 link-studio-setup-local-ai
 ```
 
-The helpers use `pacman` for the required Arch packages. The virtual-camera helper loads a temporary
-`/dev/video20` device. The AI helper installs `whisper-cpp` and verifies the downloaded multilingual
-base model against a pinned SHA-256 checksum.
+The virtual-camera helper requests administrator authorization through the system's polkit prompt,
+installs the required driver packages, and loads a temporary `/dev/video20` device. The AI helper
+installs `whisper-cpp` and verifies the downloaded multilingual base model against a pinned SHA-256
+checksum.
 
 ## Desktop appearance
 

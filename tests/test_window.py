@@ -147,6 +147,48 @@ class WindowRegressionTests(unittest.TestCase):
         self.assertEqual(control_dropdown_index("anti_flicker", 3), 3)
         self.assertEqual(TRACKING_SPEED_MAX, 255)
 
+    def test_virtual_camera_setup_refreshes_device_and_control_sensitivity(self):
+        setup_button = SimpleNamespace(set_sensitive=Mock())
+        virtual_switch = SimpleNamespace(set_sensitive=Mock())
+        virtual_row = SimpleNamespace(set_subtitle=Mock())
+        window = SimpleNamespace(
+            virtual_camera_setup_button=setup_button,
+            virtual_camera_switch=virtual_switch,
+            virtual_camera_row=virtual_row,
+            virtual_devices=[],
+            _submit=lambda _message, operation, on_success, **_kwargs: on_success(operation()),
+            _refresh_virtual_camera_devices=lambda devices: (
+                LinkStudioWindow._refresh_virtual_camera_devices(window, devices)
+            ),
+            _toast=Mock(),
+        )
+
+        with (
+            patch(
+                "link_studio.window.subprocess.run",
+                return_value=SimpleNamespace(returncode=0, stderr="", stdout=""),
+            ) as run,
+            patch(
+                "link_studio.window.discover_virtual_camera_devices",
+                return_value=["/dev/video20"],
+            ) as discover,
+        ):
+            LinkStudioWindow._setup_virtual_camera(window)
+
+        run.assert_called_once_with(
+            ["link-studio-setup-virtual-camera"],
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        discover.assert_called_once_with()
+        self.assertEqual(window.virtual_devices, ["/dev/video20"])
+        virtual_switch.set_sensitive.assert_called_once_with(True)
+        setup_button.set_sensitive.assert_has_calls([unittest.mock.call(False)] * 2)
+        virtual_row.set_subtitle.assert_called_once_with(
+            "Publish the processed feed to /dev/video20"
+        )
+
     def test_contained_region_mapping_excludes_letterbox_bars(self):
         content = contained_rect(1000, 1000, 1600, 900)
         self.assertEqual(content, (0.0, 218.75, 1000.0, 562.5))

@@ -3,6 +3,7 @@ from __future__ import annotations
 import concurrent.futures
 import io
 import logging
+import subprocess
 import threading
 import time
 from collections.abc import Callable
@@ -1018,17 +1019,34 @@ class LinkStudioWindow(Adw.ApplicationWindow):
         virtual_subtitle = (
             f"Publish the processed feed to {self.virtual_devices[0]}"
             if self.virtual_devices
-            else "Run link-studio-setup-virtual-camera, then restart Link Studio"
+            else "Set up a virtual camera to publish the processed feed"
         )
-        self.virtual_camera_switch = self._switch_row(
-            virtual,
-            "virtual_camera",
-            "Link Studio Virtual Camera",
-            False,
-            self._set_virtual_camera,
-            virtual_subtitle,
-        )
+        virtual_camera_row = self._action_row("Link Studio Virtual Camera", virtual_subtitle)
+        self.virtual_camera_switch = Gtk.Switch(active=False, valign=Gtk.Align.CENTER)
+        virtual_camera_row.add_suffix(self.virtual_camera_switch)
+        virtual_camera_row.set_activatable_widget(self.virtual_camera_switch)
+
+        def virtual_camera_changed(widget: Gtk.Switch, _param: object) -> None:
+            if not self._updating:
+                self._set_virtual_camera(widget.get_active())
+
+        self.virtual_camera_switch.connect("notify::active", virtual_camera_changed)
+        virtual.add(virtual_camera_row)
+        self._control_widgets["virtual_camera"] = self.virtual_camera_switch
+        self.virtual_camera_row = virtual_camera_row
         self.virtual_camera_switch.set_sensitive(bool(self.virtual_devices))
+
+        setup_row = self._action_row(
+            "Set up virtual camera",
+            "Install the required driver and create a temporary camera device",
+        )
+        self.virtual_camera_setup_button = Gtk.Button(label="Set up", valign=Gtk.Align.CENTER)
+        self.virtual_camera_setup_button.set_sensitive(not self.virtual_devices)
+        self.virtual_camera_setup_button.connect(
+            "clicked", lambda *_args: self._setup_virtual_camera()
+        )
+        setup_row.add_suffix(self.virtual_camera_setup_button)
+        virtual.add(setup_row)
         content.append(virtual)
         return page
 
@@ -2317,6 +2335,49 @@ class LinkStudioWindow(Adw.ApplicationWindow):
                 self.preview.remove_consumer(publisher.push)
                 publisher.stop()
                 self._toast("Virtual camera stopped")
+
+    def _setup_virtual_camera(self) -> None:
+        self.virtual_camera_setup_button.set_sensitive(False)
+
+        def setup() -> list[str]:
+            result = subprocess.run(
+                ["link-studio-setup-virtual-camera"],
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+            if result.returncode:
+                detail = result.stderr.strip() or result.stdout.strip()
+                raise RuntimeError(
+                    detail or f"Setup command exited with status {result.returncode}"
+                )
+            return discover_virtual_camera_devices()
+
+        def setup_failed(_error: Exception) -> None:
+            self.virtual_camera_setup_button.set_sensitive(not self.virtual_devices)
+
+        self._submit(
+            "",
+            setup,
+            on_success=self._refresh_virtual_camera_devices,
+            on_error=setup_failed,
+        )
+
+    def _refresh_virtual_camera_devices(self, devices: list[str]) -> None:
+        self.virtual_devices = devices
+        available = bool(devices)
+        self.virtual_camera_switch.set_sensitive(available)
+        self.virtual_camera_setup_button.set_sensitive(not available)
+        self.virtual_camera_row.set_subtitle(
+            f"Publish the processed feed to {devices[0]}"
+            if available
+            else "Setup finished, but no virtual camera device was detected"
+        )
+        self._toast(
+            f"Virtual camera is ready on {devices[0]}"
+            if available
+            else "No virtual camera device was detected; restart Link Studio and try again"
+        )
 
     def _move_camera(self, pan_delta: int, tilt_delta: int) -> None:
         pan = max(-145, min(145, int(self.state.get("pan", 0)) + pan_delta))

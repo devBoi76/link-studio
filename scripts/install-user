@@ -12,6 +12,13 @@ if ! "$SYSTEM_PYTHON" -c 'import gi' >/dev/null 2>&1; then
   exit 1
 fi
 
+# Pick the distro-specific virtual camera helper
+if [[ -r /etc/os-release ]] && grep -qiE '^(ID|ID_LIKE)=.*fedora' /etc/os-release; then
+  CAMERA_SCRIPT="setup-virtual-camera-fedora"
+else
+  CAMERA_SCRIPT="setup-virtual-camera"
+fi
+
 if command -v uv >/dev/null 2>&1; then
   uv venv --clear --python "$SYSTEM_PYTHON" --system-site-packages --seed \
     "$INSTALL_ROOT/venv"
@@ -34,7 +41,7 @@ for icon in \
 done
 mkdir -p "$BIN_ROOT"
 ln -sfn "$INSTALL_ROOT/venv/bin/link-studio" "$BIN_ROOT/link-studio"
-install -Dm755 "$PROJECT_DIR/scripts/setup-virtual-camera" \
+install -Dm755 "$PROJECT_DIR/scripts/$CAMERA_SCRIPT" \
   "$BIN_ROOT/link-studio-setup-virtual-camera"
 install -Dm755 "$PROJECT_DIR/scripts/setup-local-ai" \
   "$BIN_ROOT/link-studio-setup-local-ai"

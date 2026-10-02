@@ -1,6 +1,15 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+if ((EUID != 0)); then
+  if ! command -v pkexec >/dev/null 2>&1; then
+    printf 'Install polkit to use the system authentication prompt for virtual-camera setup.\n' >&2
+    exit 1
+  fi
+  script_path=$(readlink -f -- "$0")
+  exec pkexec "$script_path" "$@"
+fi
+
 if ! command -v pacman >/dev/null 2>&1; then
   printf 'Install v4l2loopback-dkms, v4l2loopback-utils, and your kernel headers, then run this helper again.\n' >&2
   exit 1
@@ -12,8 +21,8 @@ if [[ -n "$kernel_package" ]]; then
   packages+=("${kernel_package}-headers")
 fi
 
-printf 'Installing the Arch packages required for a virtual camera (sudo may ask for your password).\n'
-sudo pacman -S --needed "${packages[@]}"
+printf 'Installing the Arch packages required for a virtual camera.\n'
+pacman -S --needed "${packages[@]}"
 
 if [[ ! -e "/usr/lib/modules/$(uname -r)/build" ]]; then
   printf 'Kernel headers for %s are not installed. Install the matching headers package and run this helper again.\n' "$(uname -r)" >&2
@@ -26,7 +35,7 @@ if lsmod | grep -q '^v4l2loopback'; then
   exit 0
 fi
 
-printf 'Loading a temporary Link Studio virtual camera (sudo may ask for your password).\n'
-sudo modprobe v4l2loopback devices=1 video_nr=20 card_label="Link Studio Virtual Camera" exclusive_caps=1
+printf 'Loading a temporary Link Studio virtual camera.\n'
+modprobe v4l2loopback devices=1 video_nr=20 card_label="Link Studio Virtual Camera" exclusive_caps=1
 printf 'Created /dev/video20. Restart Link Studio to use it.\n'
 printf 'The module remains loaded until reboot; no persistent system configuration was written.\n'
