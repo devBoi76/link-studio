@@ -2577,7 +2577,7 @@ class LinkStudioWindow(Adw.ApplicationWindow):
             "saturation",
             "hue",
             "sharpness",
-            "anti_flicker",
+            # "anti_flicker",
         }
         return {key: value for key, value in state.items() if key in allowed}
 
@@ -2901,65 +2901,6 @@ class LinkStudioWindow(Adw.ApplicationWindow):
 
         def operation() -> tuple[str, dict[str, Any]]:
             values = preset.values
-            for key in (
-                "brightness",
-                "contrast",
-                "saturation",
-                "hue",
-                "sharpness",
-                "anti_flicker",
-                "zoom",
-            ):
-                if key in values:
-                    self.camera.set_control(key, int(values[key]))
-            if "focus_auto" in values:
-                self.camera.set_control("focus_auto", bool(values["focus_auto"]))
-            if not values.get("focus_auto", True) and "focus" in values:
-                self.camera.set_control("focus", int(values["focus"]))
-            if "white_balance_auto" in values:
-                self.camera.set_control("white_balance_auto", bool(values["white_balance_auto"]))
-            if not values.get("white_balance_auto", True) and "white_balance_temperature" in values:
-                self.camera.set_control(
-                    "white_balance_temperature", int(values["white_balance_temperature"])
-                )
-            if "auto_exposure" in values:
-                self.camera.set_auto_exposure(bool(values["auto_exposure"]))
-            if "exposure_compensation" in values:
-                self.camera.set_exposure_compensation(int(values["exposure_compensation"]))
-            if not values.get("auto_exposure", True):
-                if "iso" in values:
-                    self.camera.set_manual_iso(int(values["iso"]))
-                if "shutter_us" in values:
-                    self.camera.set_shutter(int(values["shutter_us"]))
-            for key, bit in (
-                ("hdr", FEATURE_HDR),
-                ("mirror", FEATURE_MIRROR),
-                ("gesture_zoom", FEATURE_GESTURE_ZOOM),
-            ):
-                if key in values:
-                    self.camera.set_feature(bit, bool(values[key]))
-            if "framing" in values and values["framing"] in FRAMING_MODES:
-                self.camera.set_framing(str(values["framing"]))
-            if "tracking_speed" in values:
-                self.camera.set_tracking_speed(int(values["tracking_speed"]))
-            if "audio_mode" in values:
-                self.camera.set_audio_mode(str(values["audio_mode"]))
-            elif "noise_cancellation" in values:
-                self.camera.set_noise_cancellation(bool(values["noise_cancellation"]))
-            stored_effects = values.get("software_effects")
-            if isinstance(stored_effects, dict):
-                restored = dict(stored_effects)
-                if isinstance(restored.get("tracking_area"), list):
-                    restored["tracking_area"] = tuple(restored["tracking_area"])
-                if isinstance(restored.get("pause_areas"), list):
-                    restored["pause_areas"] = tuple(
-                        tuple(region) for region in restored["pause_areas"]
-                    )
-                self.preview.set_effects(**restored)
-            mode = str(values.get("mode", "normal"))
-            if mode in VIDEO_MODES and self.camera.read_video_mode() != mode:
-                self.camera.set_video_mode(mode, verify_streaming=self.preview.running)
-            # Verify PTZ readback and retry if firmware overwrote a preset write.
             gimbal = {key: int(values[key]) for key in ("pan", "tilt") if key in values}
             for attempt in range(3):
                 for key, value in gimbal.items():
@@ -2973,12 +2914,73 @@ class LinkStudioWindow(Adw.ApplicationWindow):
                     raise RuntimeError(
                         f"Camera did not retain preset pan/tilt: expected {gimbal}, got {actual}"
                     )
+
+            for key in (
+                "brightness",
+                "contrast",
+                "saturation",
+                "hue",
+                "sharpness",
+                # "anti_flicker",
+                "zoom",
+            ):
+                if key in values:
+                    self.camera.set_control(key, int(values[key]))
+            # if "focus_auto" in values:
+            #     self.camera.set_control("focus_auto", bool(values["focus_auto"]))
+            # if not values.get("focus_auto", True) and "focus" in values:
+            #     self.camera.set_control("focus", int(values["focus"]))
+            # if "white_balance_auto" in values:
+            #     self.camera.set_control("white_balance_auto", bool(values["white_balance_auto"]))
+            # if not values.get("white_balance_auto", True) and "white_balance_temperature" in values:
+            #     self.camera.set_control(
+            #         "white_balance_temperature", int(values["white_balance_temperature"])
+            #     )
+            # if "auto_exposure" in values:
+            #     self.camera.set_auto_exposure(bool(values["auto_exposure"]))
+            # if "exposure_compensation" in values:
+            #     self.camera.set_exposure_compensation(int(values["exposure_compensation"]))
+            # if not values.get("auto_exposure", True):
+            #     if "iso" in values:
+            #         self.camera.set_manual_iso(int(values["iso"]))
+            #     if "shutter_us" in values:
+            #         self.camera.set_shutter(int(values["shutter_us"]))
+            # for key, bit in (
+            #     ("hdr", FEATURE_HDR),
+            #     ("mirror", FEATURE_MIRROR),
+            #     ("gesture_zoom", FEATURE_GESTURE_ZOOM),
+            # ):
+            #     if key in values:
+            #         self.camera.set_feature(bit, bool(values[key]))
+            # if "framing" in values and values["framing"] in FRAMING_MODES:
+            #     self.camera.set_framing(str(values["framing"]))
+            # if "tracking_speed" in values:
+            #     self.camera.set_tracking_speed(int(values["tracking_speed"]))
+            # if "audio_mode" in values:
+            #     self.camera.set_audio_mode(str(values["audio_mode"]))
+            # elif "noise_cancellation" in values:
+            #     self.camera.set_noise_cancellation(bool(values["noise_cancellation"]))
+            stored_effects = values.get("software_effects")
+            # if isinstance(stored_effects, dict):
+            #     restored = dict(stored_effects)
+            #     if isinstance(restored.get("tracking_area"), list):
+            #         restored["tracking_area"] = tuple(restored["tracking_area"])
+            #     if isinstance(restored.get("pause_areas"), list):
+            #         restored["pause_areas"] = tuple(
+            #             tuple(region) for region in restored["pause_areas"]
+            #         )
+            #     self.preview.set_effects(**restored)
+            mode = str(values.get("mode", "normal"))
+            if mode in VIDEO_MODES and self.camera.read_video_mode() != mode:
+                self.camera.set_video_mode(mode, verify_streaming=self.preview.running)
+            # Verify PTZ readback and retry if firmware overwrote a preset write.
             return mode, self.camera.read_state()
 
         def success(result: tuple[str, dict[str, Any]]) -> None:
             mode, refreshed = result
             self.state.update(preset.values)
             self.state.update(refreshed)
+
             sync_values = {**preset.values, **refreshed}
             software = preset.values.get("software_effects")
             if isinstance(software, dict):

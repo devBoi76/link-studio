@@ -256,6 +256,7 @@ class Camera:
         return value.value
 
     def set_control(self, key: str, new_value: int | bool) -> int:
+        # print("set_control", key, new_value);
         spec = STANDARD_CONTROLS[key]
         numeric = int(new_value)
         if not spec.minimum <= numeric <= spec.maximum:
